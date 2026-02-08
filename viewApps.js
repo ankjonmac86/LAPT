@@ -214,6 +214,33 @@ function initViewApplicationModal(appData) {
   }
 }
 
+function openEditSection(tabName) {
+  // Close the view modal, then open the newApplication modal in edit mode
+  try {
+    if (!currentAppData || !currentAppData.appNumber) {
+      alert('Application not loaded.');
+      return;
+    }
+
+    // Close view modal so the edit modal is the active UI
+    closeViewApplicationModal();
+
+    // store requested edit tab; newApplicationJS will read this and open the requested tab
+    sessionStorage.setItem('editTab', tabName || 'tab1');
+
+    // open the edit modal (load the existing application for edit)
+    if (typeof showNewApplicationModal === 'function') {
+      showNewApplicationModal(currentAppData.appNumber);
+    } else {
+      // fallback: attempt to open using global function available in app
+      window.showNewApplicationModal && window.showNewApplicationModal(currentAppData.appNumber);
+    }
+  } catch (e) {
+    console.error('Error opening edit section:', e);
+  }
+}
+
+
 // Hide all editors
 function hideAllRoleEditors() {
   document.querySelectorAll('.comment-editor').forEach(el => {
