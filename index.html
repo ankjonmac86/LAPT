@@ -9,21 +9,21 @@
   <link rel="manifest" href="manifest.json">
   
   <!-- CSS files -->
+  <link rel="stylesheet" href="ui-modals.css">
   <link rel="stylesheet" href="Main.css">
   <link rel="stylesheet" href="newApps.css">
   <link rel="stylesheet" href="viewApps.css">
-  <link rel="stylesheet" href="ui-modals.css">
   <link rel="stylesheet" href="print.css">
 </head>
 <body>
-  <!-- Login Container (dynamically loaded) -->
+  <!-- ===== SECTION PLACEHOLDERS ===== -->
   <div id="login-container-placeholder"></div>
-
-  <!-- Dashboard Content (hidden until logged in) -->
+  
   <div class="dashboard-content">
+    <!-- Top Menu Bar -->
     <div class="top-menu">
       <div class="menu-left">
-        <button class="add-app-btn" onclick="void(0)">
+        <button class="add-app-btn" onclick="showNewApplicationModal()">
           <i class="fas fa-plus"></i> Add New Application
         </button>
       </div>
@@ -71,112 +71,29 @@
       </div>
       
       <div class="main-content">
-        <!-- Applications Tables Container (dynamically loaded) -->
+        <!-- Apps & User sections will be loaded here -->
         <div id="apps-tables-placeholder"></div>
-
-        <!-- User Management Container (dynamically loaded) -->
         <div id="user-mgt-placeholder"></div>
-      </div>
-    </div>
-
-    <!-- Loading Overlay -->
-    <div id="loading" class="loading-overlay">
-      <div class="spinner"></div>
-      <p>Processing...</p>
-    </div>
-
-    <!-- New Application Modal -->
-    <div id="newApplicationModal" class="modal">
-      <div class="modal-content compact-modal" id="newApplicationModalContent">
-      </div>
-    </div>
-
-    <!-- View Application Modal -->
-    <div id="viewApplicationModal" class="modal">
-      <div class="modal-content large-modal">
       </div>
     </div>
   </div>
 
-  <!-- Global Loader & Section Switch Function -->
-  <script>
-    // Universal section loader
-    async function loadSectionHtml(id, file, callback) {
-      try {
-        const container = document.getElementById(id);
-        if (!container) {
-          console.warn(`Container #${id} not found`);
-          return false;
-        }
-        const resp = await fetch(file);
-        if (!resp.ok) throw new Error(`Failed to fetch ${file}: ${resp.status}`);
-        container.innerHTML = await resp.text();
-        if (typeof callback === 'function') callback();
-        return true;
-      } catch (err) {
-        console.error(`Error loading ${file}:`, err);
-        return false;
-      }
-    }
+  <!-- ===== MODALS ===== -->
+  <div id="newApplicationModal" class="modal">
+    <div class="modal-content compact-modal" id="newApplicationModalContent"></div>
+  </div>
 
-    // Load all modular sections on page load
-    async function loadAllSections() {
-      console.log('Loading all modular sections...');
-      const results = await Promise.all([
-        loadSectionHtml('login-container-placeholder', 'Login.html', window.initLogin),
-        loadSectionHtml('apps-tables-placeholder', 'AppsTable.html', window.initAppTable),
-        loadSectionHtml('user-mgt-placeholder', 'UserMgt.html', window.initUserMgt)
-      ]);
-      
-      if (results.some(r => !r)) {
-        console.warn('Some sections failed to load');
-      }
-      console.log('All modular sections loaded');
-    }
+  <div id="viewApplicationModal" class="modal">
+    <div class="modal-content large-modal"></div>
+  </div>
 
-    // Show/hide section
-    function showSection(sectionId) {
-      if (typeof restrictIfNotLoggedIn === 'function' && restrictIfNotLoggedIn()) return;
-      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-      const el = document.getElementById(sectionId);
-      if (el) {
-        el.classList.add('active');
-        if (sectionId === 'users-list' && typeof refreshUsersList === 'function') {
-          refreshUsersList();
-        }
-      }
-    }
-
-    window.showSection = showSection;
-    window.loadAllSections = loadAllSections;
-
-    // Initialize on DOM ready
-    document.addEventListener('DOMContentLoaded', async function() {
-      // Load all sections first
-      await loadAllSections();
-
-      // Then initialize common stuff
-      const cd = document.getElementById('current-date');
-      if (cd) {
-        cd.textContent = new Date().toLocaleDateString('en-US', {
-          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-        });
-      }
-
-      if (typeof initializeBrowserNotifications === 'function') initializeBrowserNotifications();
-      document.addEventListener('visibilitychange', function() {
-        if (typeof handleVisibilityChange === 'function') handleVisibilityChange();
-      });
-    });
-  </script>
-
-  <!-- Scripts in order -->
-  <script src="api.js"></script>
+  <!-- ===== SCRIPTS ===== -->
   <script src="ui-modals.js"></script>
   <script src="Main.js"></script>
   <script src="Login.js"></script>
   <script src="AppTable.js"></script>
   <script src="UserMgt.js"></script>
+  <script src="api.js"></script>
   <script src="newApps.js"></script>
   <script src="viewApps.js"></script>
   <script src="print.js"></script>
