@@ -1,97 +1,17 @@
 // Main.js — Shared Core Utilities (after modular separation)
-// This file contains only: common helpers, loading/hiding spinners, modal utilities
+// This file contains only: modal loading, modal utilities, and shared helpers
+// All loading/spinner handling is delegated to ui-modals.js
+// All authentication is in Login.js
+// All table management is in AppTable.js
+// All user management is in UserMgt.js
 
 console.log('Main.js loaded');
 
-// ----------- LOADING OVERLAY HELPERS -----------
-function showLoading(message = 'Processing...') {
-  try {
-    const viewModal = document.getElementById('viewApplicationModal');
-    const isViewOpen = viewModal && (viewModal.classList.contains('active') || window.getComputedStyle(viewModal).display !== 'none');
-    
-    if (isViewOpen) {
-      let local = document.getElementById('modal-local-loading');
-      if (!local) {
-        local = document.createElement('div');
-        local.id = 'modal-local-loading';
-        local.className = 'modal-local-loading';
-        local.innerHTML = `
-          <div class="modal-local-card" role="status" aria-live="polite" aria-label="Loading">
-            <div class="spinner large" aria-hidden="true"></div>
-            <div class="modal-local-message"></div>
-          </div>
-        `;
-        const container = viewModal.querySelector('.modal-content') || viewModal;
-        const computedPosition = window.getComputedStyle(container).position;
-        if (!computedPosition || computedPosition === 'static') {
-          container.style.position = 'relative';
-        }
-        container.appendChild(local);
-      }
-      const msgEl = local.querySelector('.modal-local-message');
-      if (msgEl) msgEl.textContent = message;
-      local.style.display = 'flex';
-      return;
-    }
-
-    if (typeof window.showGlobalLoader === 'function') {
-      window.showGlobalLoader(message);
-      return;
-    }
-    
-    let globalModal = document.getElementById('global-loading-modal');
-    if (!globalModal) {
-      globalModal = document.createElement('div');
-      globalModal.id = 'global-loading-modal';
-      globalModal.className = 'global-loading-modal';
-      globalModal.innerHTML = `
-        <div class="global-loading-backdrop" role="status" aria-live="polite"></div>
-        <div class="global-loading-card" role="dialog" aria-modal="true" aria-label="Loading">
-          <div class="spinner large" aria-hidden="true"></div>
-          <div class="global-loading-message"></div>
-        </div>
-      `;
-      document.body.appendChild(globalModal);
-    }
-    const msgEl = globalModal.querySelector('.global-loading-message');
-    if (msgEl) msgEl.textContent = message;
-    globalModal.style.display = 'flex';
-    try { document.body.style.overflow = 'hidden'; } catch (e) {}
-  } catch (e) {
-    console.warn('showLoading error', e);
-  }
-}
-
-function hideLoading() {
-  try {
-    const local = document.getElementById('modal-local-loading');
-    if (local && local.style.display !== 'none') {
-      try {
-        local.parentNode && local.parentNode.removeChild(local);
-      } catch (e) {
-        local.style.display = 'none';
-      }
-      return;
-    }
-
-    if (typeof window.hideGlobalLoader === 'function') {
-      window.hideGlobalLoader();
-      return;
-    }
-
-    const globalModal = document.getElementById('global-loading-modal');
-    if (globalModal) globalModal.style.display = 'none';
-    try { document.body.style.overflow = ''; } catch (e) {}
-  } catch (e) {
-    console.warn('hideLoading error', e);
-  }
-}
-
-// expose these for other modules
-window.showLoading = window.showLoading || showLoading;
-window.hideLoading = window.hideLoading || hideLoading;
-
 // ----------- MODAL CONTENT LOADER -----------
+/**
+ * Dynamically load modal content (newApps.html or viewApps.html)
+ * Handles script extraction and execution
+ */
 async function loadModalContent(modalName = 'new') {
   const cfg = modalName === 'view' ? {
     url: 'viewApps.html',
@@ -109,6 +29,7 @@ async function loadModalContent(modalName = 'new') {
     return false;
   }
 
+  // Check if already loaded
   if (container.getAttribute(cfg.loadedAttr) === '1') {
     return true;
   }
@@ -126,10 +47,12 @@ async function loadModalContent(modalName = 'new') {
       if (fetchedModal) {
         const innerContent = fetchedModal.querySelector('.modal-content');
         if (innerContent) {
+          // Remove scripts from content before inserting
           const scripts = Array.from(innerContent.querySelectorAll('script'));
           scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
           container.innerHTML = innerContent.innerHTML.trim();
 
+          // Extract and execute inline scripts
           const inlineScripts = Array.from(doc.querySelectorAll('script'));
           inlineScripts.forEach(scriptEl => {
             try {
@@ -157,6 +80,7 @@ async function loadModalContent(modalName = 'new') {
       }
     }
 
+    // Extract scripts before inserting HTML
     const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
     const scripts = [];
     const htmlWithoutScripts = html.replace(scriptRe, function(_, scriptContent) {
@@ -166,6 +90,7 @@ async function loadModalContent(modalName = 'new') {
 
     container.innerHTML = htmlWithoutScripts.trim();
 
+    // Execute extracted scripts
     scripts.forEach(scriptContent => {
       try {
         const s = document.createElement('script');
@@ -179,6 +104,7 @@ async function loadModalContent(modalName = 'new') {
 
     container.setAttribute(cfg.loadedAttr, '1');
 
+    // Call initialization functions
     if (modalName === 'new') {
       if (typeof window.initNewApplicationScripts === 'function') {
         try { window.initNewApplicationScripts(); } catch (e) { console.warn('initNewApplicationScripts error', e); }
@@ -186,9 +112,6 @@ async function loadModalContent(modalName = 'new') {
     } else {
       if (typeof window.viewApplicationModalInit === 'function') {
         try { window.viewApplicationModalInit(); } catch (e) { console.warn('viewApplicationModalInit error', e); }
-      }
-      if (typeof window.initViewApplicationModal === 'function') {
-        try { window.initViewApplicationModal(); } catch (e) { /* ignore */ }
       }
     }
 
@@ -199,12 +122,26 @@ async function loadModalContent(modalName = 'new') {
   }
 }
 
-// ----------- MODAL UTILITIES -----------
-function closeModal() {
-  const modal = document.getElementById('newApplicationModal');
-  if (modal) modal.style.display = 'none';
+// Alias for backwards compatibility
+async function loadModalContentIfNeeded(modalName = 'new') {
+  return await loadModalContent(modalName);
 }
 
+// ----------- MODAL UTILITIES -----------
+
+/**
+ * Close new application modal
+ */
+function closeModal() {
+  const modal = document.getElementById('newApplicationModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+/**
+ * Close view application modal
+ */
 function closeViewApplicationModal() {
   const modal = document.getElementById('viewApplicationModal');
   if (modal) {
@@ -214,12 +151,19 @@ function closeViewApplicationModal() {
   try { document.body.style.overflow = ''; } catch (e) {}
   sessionStorage.removeItem('currentViewingApp');
 }
+window.closeViewApplicationModal = closeViewApplicationModal;
 
+/**
+ * Open view application modal with app data
+ */
 async function openViewApplicationModal(appData) {
   const ok = await loadModalContent('view');
   if (!ok) {
-    if (typeof window.showToast === 'function') window.showToast('Failed to load view modal. Please refresh the page.', 'error');
-    else alert('Failed to load view modal. Please refresh the page.');
+    if (typeof window.showToast === 'function') {
+      window.showToast('Failed to load view modal. Please refresh the page.', 'error');
+    } else {
+      alert('Failed to load view modal. Please refresh the page.');
+    }
     return;
   }
 
@@ -240,6 +184,7 @@ async function openViewApplicationModal(appData) {
     }
   }, 40);
 
+  // Initialize view modal with data
   if (typeof window.initViewApplicationModal === 'function') {
     try {
       window.initViewApplicationModal(appData);
@@ -249,6 +194,7 @@ async function openViewApplicationModal(appData) {
     }
   }
 
+  // Fallback
   if (typeof window.viewApplication === 'function' && appData && appData.appNumber) {
     try {
       window.viewApplication(appData.appNumber);
@@ -258,31 +204,183 @@ async function openViewApplicationModal(appData) {
   }
 }
 
-async function showSuccessModal(message, options = {}) {
+/**
+ * Show success message using ui-modals or fallback to alert
+ * NOTE: Do NOT define our own showSuccessModal to avoid recursion!
+ * Use window.showSuccessModal from ui-modals.js directly
+ */
+async function showSuccessMessage(message, options = {}) {
   if (typeof window.showSuccessModal === 'function') {
-    return window.showSuccessModal(message, options);
+    return await window.showSuccessModal(message, options);
   }
-  alert(message);
+  // Fallback to toast or alert
+  if (typeof window.showToast === 'function') {
+    window.showToast(message, 'success');
+  } else {
+    alert(message);
+  }
 }
 
-function closeSuccessModal() { 
-  if (typeof window.hideSuccessModal === 'function') return window.hideSuccessModal(); 
+/**
+ * Close success modal via ui-modals
+ */
+function closeSuccessModal() {
+  if (typeof window.hideSuccessModal === 'function') {
+    return window.hideSuccessModal();
+  }
 }
 
+// ----------- LOADING & SPINNER UTILITIES -----------
+/**
+ * Show loading overlay
+ * Delegates to ui-modals if available, otherwise uses fallback
+ */
+function showLoading(message = 'Processing...') {
+  try {
+    const viewModal = document.getElementById('viewApplicationModal');
+    const isViewOpen = viewModal && (
+      viewModal.classList.contains('active') || 
+      window.getComputedStyle(viewModal).display !== 'none'
+    );
+
+    // If view modal is open, don't use overlay
+    if (isViewOpen) {
+      return;
+    }
+
+    // Use ui-modals global loader if available
+    if (typeof window.showGlobalLoader === 'function') {
+      window.showGlobalLoader(message);
+      return;
+    }
+
+    // Fallback: you could create a basic loader here if needed
+    console.warn('No global loader available');
+  } catch (e) {
+    console.warn('showLoading error', e);
+  }
+}
+
+/**
+ * Hide loading overlay
+ * Delegates to ui-modals if available
+ */
+function hideLoading() {
+  try {
+    if (typeof window.hideGlobalLoader === 'function') {
+      window.hideGlobalLoader();
+      return;
+    }
+    console.warn('No global loader available to hide');
+  } catch (e) {
+    console.warn('hideLoading error', e);
+  }
+}
+
+// Expose these for other modules
+window.showLoading = window.showLoading || showLoading;
+window.hideLoading = window.hideLoading || hideLoading;
+
+// ----------- HELPER UTILITIES -----------
+
+/**
+ * Check if user is logged in, redirect to login if not
+ */
 function restrictIfNotLoggedIn() {
   const loggedInName = localStorage.getItem('loggedInName');
-  if (!loggedInName) { 
+  if (!loggedInName) {
     if (typeof showLoginPage === 'function') showLoginPage();
-    return true; 
+    return true;
   }
   return false;
 }
 
+/**
+ * Show a section and hide others
+ */
+window.showSection = async function(sectionId) {
+  if (restrictIfNotLoggedIn()) return;
+  document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById(sectionId);
+  if (el) el.classList.add('active');
+  // Load applications for this section
+  if (typeof loadApplications === 'function') {
+    await loadApplications(sectionId, { showLoading: true });
+  }
+};
+
+// ----------- INITIALIZATION -----------
+
+/**
+ * Initialize all modules on page load
+ */
+async function initializeApp() {
+  console.log('Initializing application...');
+
+  // Load sections
+  await loadAllSections();
+
+  console.log('Application initialized');
+}
+
+/**
+ * Load all major sections
+ */
+async function loadAllSections() {
+  try {
+    // Load Login
+    if (typeof window.initLogin === 'function') {
+      window.initLogin();
+    }
+    // Load AppTable
+    if (typeof window.initAppTable === 'function') {
+      window.initAppTable();
+    }
+    // Load UserMgt
+    if (typeof window.initUserMgt === 'function') {
+      window.initUserMgt();
+    }
+  } catch (e) {
+    console.error('Error initializing sections:', e);
+  }
+}
+
 // ----------- EXPORTS FOR GLOBAL USE -----------
 window.loadModalContent = loadModalContent;
+window.loadModalContentIfNeeded = loadModalContentIfNeeded;
 window.closeModal = closeModal;
 window.closeViewApplicationModal = closeViewApplicationModal;
 window.openViewApplicationModal = openViewApplicationModal;
-window.showSuccessModal = showSuccessModal;
+window.showSuccessMessage = showSuccessMessage;
 window.closeSuccessModal = closeSuccessModal;
+window.showLoading = showLoading;
+window.hideLoading = hideLoading;
 window.restrictIfNotLoggedIn = restrictIfNotLoggedIn;
+window.initializeApp = initializeApp;
+window.loadAllSections = loadAllSections;
+
+// ----------- PAGE LIFECYCLE -----------
+
+/**
+ * On page load, initialize app
+ */
+document.addEventListener('DOMContentLoaded', function() {
+  console.log('DOM loaded, initializing app...');
+  if (typeof initializeApp === 'function') {
+    initializeApp();
+  }
+});
+
+/**
+ * On window unload, cleanup
+ */
+window.addEventListener('beforeunload', function() {
+  try {
+    if (typeof clearLoginIntervals === 'function') clearLoginIntervals();
+    if (typeof clearAppTableIntervals === 'function') clearAppTableIntervals();
+  } catch (e) {
+    console.warn('Cleanup error:', e);
+  }
+});
+
+console.log('Main.js fully loaded and ready');
