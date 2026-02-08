@@ -1,5 +1,4 @@
-// AppTable.js - Application Tables Management
-// Handles loading, displaying, and managing application tables for all statuses
+// AppTable.js - UPDATED to fetch user names
 
 console.log('AppTable.js loaded');
 
@@ -7,9 +6,52 @@ console.log('AppTable.js loaded');
 const appTableStates = {};
 let appTableRefreshInterval;
 let lastAppTableCount = 0;
+let usersCache = null; // Cache users list to avoid repeated fetches
+let usersCacheTTL = 0; // Cache expiration time
 
 // Per-section state to avoid flicker and handle concurrent requests
 const appTableSectionStates = {}; // { [sectionId]: { requestId: number, loading: boolean } }
+
+// ----------- HELPER: Get Users List with Caching -----------
+/**
+ * Fetch users list with caching (cache for 5 minutes)
+ */
+async function getCachedUsersList() {
+  const now = Date.now();
+  if (usersCache && usersCacheTTL > now) {
+    return usersCache;
+  }
+
+  try {
+    const resp = await window.apiService.getAllUsers();
+    if (resp && resp.success && resp.data) {
+      usersCache = resp.data;
+      usersCacheTTL = now + (5 * 60 * 1000); // Cache for 5 minutes
+      return usersCache;
+    }
+  } catch (e) {
+    console.warn('Could not fetch users list:', e);
+  }
+  
+  return [];
+}
+
+/**
+ * Get user name by role (lookup in users list)
+ */
+async function getUserNameByRole(role) {
+  if (!role) return role;
+
+  try {
+    const users = await getCachedUsersList();
+    const user = users.find(u => u.role && u.role.toString().toLowerCase() === role.toString().toLowerCase());
+    if (user) return user.name;
+  } catch (e) {
+    console.warn('Could not look up user by role:', e);
+  }
+
+  return role; // Fallback: return role as-is
+}
 
 // ----------- INITIALIZATION -----------
 function initAppTable() {
@@ -80,27 +122,6 @@ function escapeHtml(s) {
 }
 
 /**
- * Get user name from role (lookup in users sheet or use role directly)
- */
-async function getUserNameByRole(role) {
-  if (!role) return 'N/A';
-  
-  // Try to fetch from server if available
-  try {
-    const allUsersResp = await window.apiService.getAllUsers();
-    if (allUsersResp && allUsersResp.success && allUsersResp.data) {
-      const user = allUsersResp.data.find(u => u.role === role);
-      if (user) return user.name;
-    }
-  } catch (e) {
-    console.warn('Could not fetch users:', e);
-  }
-  
-  // Fallback: return role as-is
-  return role;
-}
-
-/**
  * Get next action role based on current stage
  */
 function getNextActionRole(currentStage) {
@@ -112,7 +133,7 @@ function getNextActionRole(currentStage) {
     '2nd Review': 'Approver',
     'Approval': 'APPROVED'
   };
-  
+
   return stageRoleMap[currentStage] || 'N/A';
 }
 
@@ -156,7 +177,7 @@ function setSectionHeaderLoading(sectionId, isLoading) {
 /**
  * Create a table row for an application with next action by column
  */
-function createRowForApplication(app) {
+async function createRowForApplication(app) {
   const tr = document.createElement('tr');
 
   // Application Number (clickable)
@@ -190,17 +211,32 @@ function createRowForApplication(app) {
   tdDate.textContent = app.date ? new Date(app.date).toLocaleDateString() : 'N/A';
   tr.appendChild(tdDate);
 
-  // Action By (current stage role)
+  // ===== Action By (user name, not role) =====
   const tdActionBy = document.createElement('td');
   tdActionBy.className = 'action-by';
-  tdActionBy.textContent = app.actionBy || 'N/A';
+  // If actionBy is a role, try to resolve to user name; otherwise use as-is (it's already a name)
+  let actionByDisplay = app.actionBy || 'N/A';
+  if (actionByDisplay && !actionByDisplay.includes('@') && !actionByDisplay.includes(' ')) {
+    // Looks like a role, try to resolve
+    const userName = await getUserNameByRole(actionByDisplay);
+    actionByDisplay = userName || app.actionBy || 'N/A';
+  }
+  tdActionBy.textContent = actionByDisplay;
   tr.appendChild(tdActionBy);
 
-  // ===== NEW: Next Action By (next stage role) =====
+  // ===== Next Action By (next stage role resolved to user name) =====
   const tdNextActionBy = document.createElement('td');
   tdNextActionBy.className = 'next-action-by';
   const nextRole = getNextActionRole(app.stage || 'New');
-  tdNextActionBy.textContent = nextRole;
+  
+  // Resolve next role to user name
+  let nextActionByDisplay = nextRole;
+  if (nextRole && nextRole !== 'APPROVED' && nextRole !== 'N/A') {
+    const nextUserName = await getUserNameByRole(nextRole);
+    nextActionByDisplay = nextUserName || nextRole;
+  }
+  
+  tdNextActionBy.textContent = nextActionByDisplay;
   tdNextActionBy.setAttribute('data-role', nextRole);
   tr.appendChild(tdNextActionBy);
 
@@ -212,7 +248,7 @@ function createRowForApplication(app) {
 /**
  * Smart update that only changes rows that differ (reduces flicker)
  */
-function diffUpdateTable(tableId, applications) {
+async function diffUpdateTable(tableId, applications) {
   const tbody = document.querySelector(`#${tableId}`);
   if (!tbody) return;
 
@@ -225,9 +261,13 @@ function diffUpdateTable(tableId, applications) {
 
   const frag = document.createDocumentFragment();
 
-  applications.forEach(app => {
+  // Pre-fetch users list once for all applications
+  const users = await getCachedUsersList();
+
+  for (const app of applications) {
     const key = app.appNumber || '';
     const existing = existingRows.get(key);
+
     if (existing) {
       const nameCell = existing.querySelector('.applicant-name');
       const amountCell = existing.querySelector('.amount');
@@ -257,17 +297,27 @@ function diffUpdateTable(tableId, applications) {
         changed = true;
       }
 
-      // Check Action By
-      if ((actionByCell && actionByCell.textContent) !== (app.actionBy || 'N/A')) {
-        if (actionByCell) actionByCell.textContent = app.actionBy || 'N/A';
+      // Check Action By (resolve role to name if needed)
+      let actionByDisplay = app.actionBy || 'N/A';
+      if (actionByDisplay && !actionByDisplay.includes('@') && !actionByDisplay.includes(' ')) {
+        const user = users.find(u => u.role && u.role.toString().toLowerCase() === actionByDisplay.toString().toLowerCase());
+        if (user) actionByDisplay = user.name;
+      }
+      if ((actionByCell && actionByCell.textContent) !== actionByDisplay) {
+        if (actionByCell) actionByCell.textContent = actionByDisplay;
         changed = true;
       }
 
-      // Check Next Action By
+      // Check Next Action By (resolve role to name)
       const nextRole = getNextActionRole(app.stage || 'New');
-      if ((nextActionByCell && nextActionByCell.textContent) !== nextRole) {
+      let nextActionByDisplay = nextRole;
+      if (nextRole && nextRole !== 'APPROVED' && nextRole !== 'N/A') {
+        const nextUser = users.find(u => u.role && u.role.toString().toLowerCase() === nextRole.toString().toLowerCase());
+        if (nextUser) nextActionByDisplay = nextUser.name;
+      }
+      if ((nextActionByCell && nextActionByCell.textContent) !== nextActionByDisplay) {
         if (nextActionByCell) {
-          nextActionByCell.textContent = nextRole;
+          nextActionByCell.textContent = nextActionByDisplay;
           nextActionByCell.setAttribute('data-role', nextRole);
         }
         changed = true;
@@ -282,12 +332,12 @@ function diffUpdateTable(tableId, applications) {
         setTimeout(() => existing.classList.remove('row-updated'), 1400);
       }
     } else {
-      const newRow = createRowForApplication(app);
+      const newRow = await createRowForApplication(app);
       newRow.classList.add('row-updated');
       frag.appendChild(newRow);
       setTimeout(() => newRow.classList.remove('row-updated'), 1400);
     }
-  });
+  }
 
   tbody.replaceChildren(frag);
 }
@@ -337,7 +387,7 @@ async function loadApplications(sectionId, options = {}) {
     setSectionHeaderLoading(sectionId, false);
 
     if (response.success) {
-      diffUpdateTable(`${sectionId}-list`, response.data || []);
+      await diffUpdateTable(`${sectionId}-list`, response.data || []);
     } else {
       if (!isAuto) {
         tbody.innerHTML = `<tr><td colspan="6" class="error">Error: ${escapeHtml(response.message)}</td></tr>`;
