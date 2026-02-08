@@ -1033,3 +1033,19 @@ table[aria-busy="true"] {
     font-size: var(--text-xs);
   }
 }
+
+
+.next-action-by {
+  color: var(--primary-600);
+  font-weight: 600;
+}
+
+/* Hover effect on action by columns */
+.action-by,
+.next-action-by {
+  transition: background-color var(--transition-fast);
+}
+
+.applications-table tr:hover .next-action-by {
+  background-color: var(--primary-50);
+}
