@@ -1,9 +1,32 @@
 // Login.js - Authentication & Session Management
 console.log('Login.js loaded');
 
+// ----------- CACHED ELEMENTS -----------
+const loginCachedElements = {
+  'logged-in-user': document.getElementById('logged-in-user'),
+  'user-notification-badge': document.getElementById('user-notification-badge'),
+  'current-date': document.getElementById('current-date')
+};
+
+let notificationCheckInterval;
+let lastAppCount = 0;
+
+// ----------- CORE HELPERS -----------
+function clearLoginIntervals() {
+  if (notificationCheckInterval) clearInterval(notificationCheckInterval);
+}
+
 function initLogin() {
   console.log('Initializing Login module...');
   
+  // Set current date
+  const cd = loginCachedElements['current-date'];
+  if (cd) {
+    cd.textContent = new Date().toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+  }
+
   const loginForm = document.getElementById('login-form');
   if (loginForm) {
     loginForm.addEventListener('submit', async function(e) {
@@ -24,13 +47,17 @@ function initLogin() {
     setLoggedInUser(loggedInName, localStorage.getItem('userRole') || '');
     showDashboard();
     document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-    const newSection = document.getElementById('new');
-    if (newSection) newSection.classList.add('active');
+    const pendingSection = document.getElementById('pending');
+    if (pendingSection) pendingSection.classList.add('active');
     if (typeof initializeAppCount === 'function') initializeAppCount();
     if (typeof initializeAndRefreshTables === 'function') initializeAndRefreshTables();
   } else {
     showLoginPage();
   }
+
+  // Initialize browser notifications
+  initializeBrowserNotifications();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   console.log('Login module initialized');
 }
@@ -40,7 +67,7 @@ function showLoginPage() {
   localStorage.removeItem('loggedInName');
   localStorage.removeItem('userRole');
   localStorage.removeItem('userLevel');
-  if (typeof clearIntervals === 'function') clearIntervals();
+  clearLoginIntervals();
 }
 
 function showDashboard() {
@@ -51,7 +78,7 @@ function showDashboard() {
 }
 
 function setLoggedInUser(name, role = '') {
-  const el = document.getElementById('logged-in-user');
+  const el = loginCachedElements['logged-in-user'] || document.getElementById('logged-in-user');
   if (el) el.textContent = role ? `${name} (${role})` : name;
   if (name && typeof updateUserNotificationBadge === 'function') updateUserNotificationBadge();
 }
@@ -67,7 +94,7 @@ async function logout() {
     localStorage.removeItem('loggedInName');
     localStorage.removeItem('userRole');
     localStorage.removeItem('userLevel');
-    if (typeof clearIntervals === 'function') clearIntervals();
+    clearLoginIntervals();
     showLoginPage();
 
     if (typeof window.showToast === 'function') window.showToast('Logged out', 'info');
@@ -89,8 +116,8 @@ async function handleLoginFunction(name) {
       setLoggedInUser(name, response.user?.role || '');
       showDashboard();
       document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-      const newSection = document.getElementById('new');
-      if (newSection) newSection.classList.add('active');
+      const pendingSection = document.getElementById('pending');
+      if (pendingSection) pendingSection.classList.add('active');
       if (typeof initializeAppCount === 'function') initializeAppCount();
       if (typeof initializeAndRefreshTables === 'function') initializeAndRefreshTables();
     } else {
@@ -105,9 +132,98 @@ async function handleLoginFunction(name) {
   }
 }
 
+// ----------- NOTIFICATIONS ----------
+function initializeBrowserNotifications() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') setupNotificationListener();
+  else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p==='granted') setupNotificationListener(); });
+}
+
+function setupNotificationListener() {
+  if (notificationCheckInterval) clearInterval(notificationCheckInterval);
+  notificationCheckInterval = setInterval(() => { checkForNewApplications(); }, 30000);
+}
+
+async function checkForNewApplications() {
+  const user = localStorage.getItem('loggedInName'); 
+  if (!user || document.visibilityState === 'visible') return;
+  try {
+    const r = await window.apiService.getApplicationCountsForUser(user);
+    const current = r.count || 0; 
+    const previous = lastAppCount; 
+    lastAppCount = current;
+    if (current > previous && previous > 0) {
+      const newCount = current - previous; 
+      const role = localStorage.getItem('userRole') || '';
+      if (Notification.permission === 'granted') {
+        const n = new Notification('New Application Assignment', { 
+          body: `${user} have ${newCount} application(s) for your action${role?` as ${role}`:''}`, 
+          icon: 'https://img.icons8.com/color/192/000000/loan.png' 
+        });
+        n.onclick = () => { 
+          window.focus(); 
+          n.close(); 
+          if (typeof refreshApplications === 'function') refreshApplications(); 
+        };
+        setTimeout(()=>n.close(), 10000);
+      }
+    }
+  } catch (e) { 
+    console.error('checkForNewApplications', e); 
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') { 
+    if (typeof refreshApplications === 'function') refreshApplications(); 
+    if (typeof updateUserNotificationBadge === 'function') updateUserNotificationBadge(); 
+  } else { 
+    const u = localStorage.getItem('loggedInName'); 
+    if (u) window.apiService.getApplicationCountsForUser(u).then(r => lastAppCount = r.count || 0).catch(() => {}); 
+  }
+}
+
+async function initializeAppCount() {
+  const u = localStorage.getItem('loggedInName'); 
+  if (!u) return;
+  try { 
+    const r = await window.apiService.getApplicationCountsForUser(u); 
+    lastAppCount = r.count || 0; 
+  } catch (e) { 
+    console.error('initializeAppCount', e); 
+  }
+}
+
+async function updateUserNotificationBadge() {
+  const userName = localStorage.getItem('loggedInName'); 
+  if (!userName) return;
+  try {
+    const res = await window.apiService.getApplicationCountsForUser(userName);
+    const count = res.count || 0;
+    const badge = loginCachedElements['user-notification-badge'] || document.getElementById('user-notification-badge');
+    if (badge) { 
+      if (count > 0) { 
+        badge.textContent = count > 99 ? '99+' : count; 
+        badge.style.display = 'flex'; 
+      } else { 
+        badge.style.display = 'none'; 
+      }
+    }
+  } catch (e) { 
+    console.error('updateUserNotificationBadge', e); 
+  }
+}
+
+// ----------- EXPORTS -----------
 window.showLoginPage = showLoginPage;
 window.showDashboard = showDashboard;
 window.setLoggedInUser = setLoggedInUser;
 window.logout = logout;
 window.handleLoginFunction = handleLoginFunction;
 window.initLogin = initLogin;
+window.clearLoginIntervals = clearLoginIntervals;
+window.initializeBrowserNotifications = initializeBrowserNotifications;
+window.checkForNewApplications = checkForNewApplications;
+window.handleVisibilityChange = handleVisibilityChange;
+window.initializeAppCount = initializeAppCount;
+window.updateUserNotificationBadge = updateUserNotificationBadge;
