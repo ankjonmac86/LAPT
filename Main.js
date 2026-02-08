@@ -1,11 +1,41 @@
-// Main.js — Shared Core Utilities (after modular separation)
-// This file contains only: modal loading, modal utilities, and shared helpers
-// All loading/spinner handling is delegated to ui-modals.js
-// All authentication is in Login.js
-// All table management is in AppTable.js
-// All user management is in UserMgt.js
+// Main.js — Shared Core Utilities (UPDATED with HTML loading)
+// This file contains: modal loading, modal utilities, shared helpers, AND section HTML loading
 
 console.log('Main.js loaded');
+
+// ----------- SECTION HTML LOADER -----------
+/**
+ * Generic loader for HTML sections
+ * Fetches HTML file and inserts into container, then calls init function
+ */
+async function loadSectionHtml(containerId, htmlFile, initFunction) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    console.warn(`Container ${containerId} not found`);
+    return false;
+  }
+
+  try {
+    const response = await fetch(htmlFile, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Failed to fetch ${htmlFile}: ${response.status}`);
+    
+    const html = await response.text();
+    container.innerHTML = html;
+
+    // Call initialization function if provided
+    if (typeof initFunction === 'function') {
+      console.log(`Calling init function for ${containerId}`);
+      initFunction();
+    }
+
+    console.log(`Successfully loaded ${htmlFile} into ${containerId}`);
+    return true;
+  } catch (error) {
+    console.error(`Error loading ${htmlFile}:`, error);
+    container.innerHTML = `<p style="color: red;">Error loading section: ${error.message}</p>`;
+    return false;
+  }
+}
 
 // ----------- MODAL CONTENT LOADER -----------
 /**
@@ -205,15 +235,12 @@ async function openViewApplicationModal(appData) {
 }
 
 /**
- * Show success message using ui-modals or fallback to alert
- * NOTE: Do NOT define our own showSuccessModal to avoid recursion!
- * Use window.showSuccessModal from ui-modals.js directly
+ * Show success message using ui-modals or fallback
  */
 async function showSuccessMessage(message, options = {}) {
   if (typeof window.showSuccessModal === 'function') {
     return await window.showSuccessModal(message, options);
   }
-  // Fallback to toast or alert
   if (typeof window.showToast === 'function') {
     window.showToast(message, 'success');
   } else {
@@ -222,7 +249,7 @@ async function showSuccessMessage(message, options = {}) {
 }
 
 /**
- * Close success modal via ui-modals
+ * Close success modal
  */
 function closeSuccessModal() {
   if (typeof window.hideSuccessModal === 'function') {
@@ -231,31 +258,15 @@ function closeSuccessModal() {
 }
 
 // ----------- LOADING & SPINNER UTILITIES -----------
+
 /**
- * Show loading overlay
- * Delegates to ui-modals if available, otherwise uses fallback
+ * Show loading overlay via ui-modals
  */
 function showLoading(message = 'Processing...') {
   try {
-    const viewModal = document.getElementById('viewApplicationModal');
-    const isViewOpen = viewModal && (
-      viewModal.classList.contains('active') || 
-      window.getComputedStyle(viewModal).display !== 'none'
-    );
-
-    // If view modal is open, don't use overlay
-    if (isViewOpen) {
-      return;
-    }
-
-    // Use ui-modals global loader if available
     if (typeof window.showGlobalLoader === 'function') {
       window.showGlobalLoader(message);
-      return;
     }
-
-    // Fallback: you could create a basic loader here if needed
-    console.warn('No global loader available');
   } catch (e) {
     console.warn('showLoading error', e);
   }
@@ -263,15 +274,12 @@ function showLoading(message = 'Processing...') {
 
 /**
  * Hide loading overlay
- * Delegates to ui-modals if available
  */
 function hideLoading() {
   try {
     if (typeof window.hideGlobalLoader === 'function') {
       window.hideGlobalLoader();
-      return;
     }
-    console.warn('No global loader available to hide');
   } catch (e) {
     console.warn('hideLoading error', e);
   }
@@ -284,7 +292,7 @@ window.hideLoading = window.hideLoading || hideLoading;
 // ----------- HELPER UTILITIES -----------
 
 /**
- * Check if user is logged in, redirect to login if not
+ * Check if user is logged in
  */
 function restrictIfNotLoggedIn() {
   const loggedInName = localStorage.getItem('loggedInName');
@@ -309,43 +317,52 @@ window.showSection = async function(sectionId) {
   }
 };
 
-// ----------- INITIALIZATION -----------
+// ----------- MAIN INITIALIZATION -----------
 
 /**
- * Initialize all modules on page load
+ * Load all sections from separate HTML files
+ */
+async function loadAllSections() {
+  console.log('Loading all sections...');
+
+  // Load Login section
+  await loadSectionHtml('login-container-placeholder', 'Login.html', function() {
+    if (typeof window.initLogin === 'function') {
+      window.initLogin();
+    }
+  });
+
+  // Load Apps Table section
+  await loadSectionHtml('apps-tables-placeholder', 'AppsTable.html', function() {
+    if (typeof window.initAppTable === 'function') {
+      window.initAppTable();
+    }
+  });
+
+  // Load User Management section
+  await loadSectionHtml('user-mgt-placeholder', 'UserMgt.html', function() {
+    if (typeof window.initUserMgt === 'function') {
+      window.initUserMgt();
+    }
+  });
+
+  console.log('All sections loaded');
+}
+
+/**
+ * Initialize the entire application
  */
 async function initializeApp() {
   console.log('Initializing application...');
 
-  // Load sections
+  // Load all major sections
   await loadAllSections();
 
   console.log('Application initialized');
 }
 
-/**
- * Load all major sections
- */
-async function loadAllSections() {
-  try {
-    // Load Login
-    if (typeof window.initLogin === 'function') {
-      window.initLogin();
-    }
-    // Load AppTable
-    if (typeof window.initAppTable === 'function') {
-      window.initAppTable();
-    }
-    // Load UserMgt
-    if (typeof window.initUserMgt === 'function') {
-      window.initUserMgt();
-    }
-  } catch (e) {
-    console.error('Error initializing sections:', e);
-  }
-}
-
 // ----------- EXPORTS FOR GLOBAL USE -----------
+window.loadSectionHtml = loadSectionHtml;
 window.loadModalContent = loadModalContent;
 window.loadModalContentIfNeeded = loadModalContentIfNeeded;
 window.closeModal = closeModal;
@@ -366,13 +383,11 @@ window.loadAllSections = loadAllSections;
  */
 document.addEventListener('DOMContentLoaded', function() {
   console.log('DOM loaded, initializing app...');
-  if (typeof initializeApp === 'function') {
-    initializeApp();
-  }
+  initializeApp();
 });
 
 /**
- * On window unload, cleanup
+ * Cleanup on unload
  */
 window.addEventListener('beforeunload', function() {
   try {
