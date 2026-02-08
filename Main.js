@@ -1,61 +1,27 @@
-// Main.js — single modal loader implementation (no recursion) + app logic
-// Updated to integrate the shared UI utilities (showGlobalLoader/hideGlobalLoader, showSuccessModal, showConfirmModal, showToast)
-// and to reliably show a modal-local loader inside the view modal when it is active.
+// Main.js — Shared Core Utilities (after modular separation)
+// This file contains only: common helpers, loading/hiding spinners, modal utilities
 
-// ----------- CACHED ELEMENTS & VARIABLES -----------
-const cachedElements = {};
-let currentAppNumber = "";
-let currentAppFolderId = "";
-let lastAppCount = 0;
-let notificationCheckInterval;
-let refreshInterval;
-let currentViewingAppData = null;
+console.log('Main.js loaded');
 
-// Per-section state to avoid flicker and handle concurrent requests
-const sectionStates = {}; // { [sectionId]: { requestId: number, loading: boolean } }
-
-// ----------- CORE HELPERS (define early so other code can call them) -----------
-function clearIntervals() {
-  if (notificationCheckInterval) clearInterval(notificationCheckInterval);
-  if (refreshInterval) clearInterval(refreshInterval);
-}
-
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-}
-
-// showLoading/hideLoading:
-// - If the view modal is open, show a loader inside it (centered card)
-// - Otherwise call the global loader (ui-modals) which is reference counted
+// ----------- LOADING OVERLAY HELPERS -----------
 function showLoading(message = 'Processing...') {
   try {
     const viewModal = document.getElementById('viewApplicationModal');
-    // Detect visible/open modal robustly: either has .active OR computed display not 'none'
     const isViewOpen = viewModal && (viewModal.classList.contains('active') || window.getComputedStyle(viewModal).display !== 'none');
+    
     if (isViewOpen) {
       let local = document.getElementById('modal-local-loading');
       if (!local) {
         local = document.createElement('div');
         local.id = 'modal-local-loading';
         local.className = 'modal-local-loading';
-        // Ensure the loader covers the modal content — position absolute with inset:0
         local.innerHTML = `
           <div class="modal-local-card" role="status" aria-live="polite" aria-label="Loading">
             <div class="spinner large" aria-hidden="true"></div>
             <div class="modal-local-message"></div>
           </div>
         `;
-        // Place inside the modal-content so it overlays only the modal
         const container = viewModal.querySelector('.modal-content') || viewModal;
-        // Ensure container has positioning context (relative) so absolute inset works
         const computedPosition = window.getComputedStyle(container).position;
         if (!computedPosition || computedPosition === 'static') {
           container.style.position = 'relative';
@@ -68,12 +34,11 @@ function showLoading(message = 'Processing...') {
       return;
     }
 
-    // Use global loader if available (ui-modals)
     if (typeof window.showGlobalLoader === 'function') {
       window.showGlobalLoader(message);
       return;
     }
-    // Fallback to legacy global modal element
+    
     let globalModal = document.getElementById('global-loading-modal');
     if (!globalModal) {
       globalModal = document.createElement('div');
@@ -99,10 +64,8 @@ function showLoading(message = 'Processing...') {
 
 function hideLoading() {
   try {
-    // If modal-local loading exists and visible, hide it
     const local = document.getElementById('modal-local-loading');
     if (local && local.style.display !== 'none') {
-      // Prefer removing the element entirely so repeated calls create a fresh instance
       try {
         local.parentNode && local.parentNode.removeChild(local);
       } catch (e) {
@@ -111,7 +74,6 @@ function hideLoading() {
       return;
     }
 
-    // Global UI loader via ui-modals
     if (typeof window.hideGlobalLoader === 'function') {
       window.hideGlobalLoader();
       return;
@@ -125,292 +87,11 @@ function hideLoading() {
   }
 }
 
-// expose these for other modules that expect them (don't overwrite if already provided by ui-modals)
+// expose these for other modules
 window.showLoading = window.showLoading || showLoading;
 window.hideLoading = window.hideLoading || hideLoading;
 
-function escapeHtml(s) {
-  if (!s) return '';
-  return s.toString().replace(/[&<>"']/g, function(m){
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
-  });
-}
-
-// --------- Table helpers to reduce flicker & DOM churn ----------
-function ensureSectionState(sectionId) {
-  if (!sectionStates[sectionId]) sectionStates[sectionId] = { requestId: 0, loading: false };
-  return sectionStates[sectionId];
-}
-
-function setSectionHeaderLoading(sectionId, isLoading) {
-  const section = document.getElementById(sectionId);
-  if (!section) return;
-  const actions = section.querySelector('.section-actions');
-  if (!actions) return;
-  let spinner = actions.querySelector('.section-spinner');
-  if (isLoading) {
-    if (!spinner) {
-      spinner = document.createElement('div');
-      spinner.className = 'section-spinner';
-      spinner.innerHTML = `<div class="spinner-inline" aria-hidden="true"></div><span class="section-spinner-text">Updating...</span>`;
-      actions.appendChild(spinner);
-    } else {
-      spinner.style.display = 'inline-flex';
-    }
-  } else {
-    if (spinner) spinner.style.display = 'none';
-  }
-}
-
-// Create row and attach click handler that passes the anchor element for spinner placement
-function createRowForApplication(app) {
-  const tr = document.createElement('tr');
-
-  const tdApp = document.createElement('td'); tdApp.className='app-number';
-  const a = document.createElement('a'); a.href='javascript:void(0)'; a.className='app-number-link';
-  a.textContent = app.appNumber || '';
-  a.addEventListener('click', (e) => {
-    // pass the anchor element so handler can show inline spinner next to it
-    handleAppNumberClick(app.appNumber, e.currentTarget);
-  });
-  tdApp.appendChild(a); tr.appendChild(tdApp);
-
-  const tdName = document.createElement('td'); tdName.className='applicant-name'; tdName.textContent = app.applicantName || 'N/A'; tr.appendChild(tdName);
-  const tdAmount = document.createElement('td'); tdAmount.className='amount'; tdAmount.textContent = (app.amount==null?'0.00':Number(app.amount).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})); tr.appendChild(tdAmount);
-  const tdDate = document.createElement('td'); tdDate.className='date'; tdDate.textContent = app.date ? new Date(app.date).toLocaleDateString() : 'N/A'; tr.appendChild(tdDate);
-  const tdActionBy = document.createElement('td'); tdActionBy.className='action-by'; tdActionBy.textContent = app.actionBy || 'N/A'; tr.appendChild(tdActionBy);
-
-  return tr;
-}
-
-function diffUpdateTable(tableId, applications) {
-  const tbody = document.querySelector(`#${tableId}`);
-  if (!tbody) return;
-
-  const existingRows = new Map();
-  Array.from(tbody.children).forEach(row => {
-    const anchor = row.querySelector('.app-number-link');
-    const key = anchor ? anchor.textContent : null;
-    if (key) existingRows.set(key, row);
-  });
-
-  const frag = document.createDocumentFragment();
-
-  applications.forEach(app => {
-    const key = app.appNumber || '';
-    const existing = existingRows.get(key);
-    if (existing) {
-      const nameCell = existing.querySelector('.applicant-name');
-      const amountCell = existing.querySelector('.amount');
-      const dateCell = existing.querySelector('.date');
-      const actionByCell = existing.querySelector('.action-by');
-
-      let changed = false;
-      if ((nameCell && nameCell.textContent) !== (app.applicantName || 'N/A')) { if (nameCell) nameCell.textContent = app.applicantName || 'N/A'; changed = true; }
-      const formattedAmount = (app.amount==null?'0.00':Number(app.amount).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}));
-      if ((amountCell && amountCell.textContent) !== formattedAmount) { if (amountCell) amountCell.textContent = formattedAmount; changed = true; }
-      const formattedDate = app.date ? new Date(app.date).toLocaleDateString() : 'N/A';
-      if ((dateCell && dateCell.textContent) !== formattedDate) { if (dateCell) dateCell.textContent = formattedDate; changed = true; }
-      if ((actionByCell && actionByCell.textContent) !== (app.actionBy || 'N/A')) { if (actionByCell) actionByCell.textContent = app.actionBy || 'N/A'; changed = true; }
-
-      frag.appendChild(existing);
-
-      if (changed) {
-        existing.classList.remove('row-updated');
-        void existing.offsetWidth;
-        existing.classList.add('row-updated');
-        setTimeout(() => existing.classList.remove('row-updated'), 1400);
-      }
-    } else {
-      const newRow = createRowForApplication(app);
-      newRow.classList.add('row-updated');
-      frag.appendChild(newRow);
-      setTimeout(() => newRow.classList.remove('row-updated'), 1400);
-    }
-  });
-
-  tbody.replaceChildren(frag);
-}
-
-// ----------- PAGE INIT -----------
-function cacheElements() {
-  const elements = {
-    'logged-in-user': 'logged-in-user',
-    'current-date': 'current-date',
-    'loading': 'loading',
-    'success-modal': 'success-modal',
-    'success-message': 'success-message',
-    'app-number': 'app-number',
-    'user-notification-badge': 'user-notification-badge',
-    'viewApplicationModal': 'viewApplicationModal'
-  };
-  for (const [key, id] of Object.entries(elements)) {
-    cachedElements[key] = document.getElementById(id);
-  }
-}
-
-window.addEventListener('load', function() {
-  clearIntervals();
-});
-
-document.addEventListener('DOMContentLoaded', function() {
-  cacheElements();
-  const cd = cachedElements['current-date'];
-  if (cd) {
-    cd.textContent = new Date().toLocaleDateString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-    });
-  }
-
-  initializeBrowserNotifications();
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-
-  const loggedInName = localStorage.getItem('loggedInName');
-  if (loggedInName) {
-    // Auto-verify removed. Restore UI locally without calling verifyUserOnLoad().
-    // This prevents an automatic network call on page load.
-    setLoggedInUser(loggedInName, localStorage.getItem('userRole') || '');
-    showDashboard();
-    document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-    const newSection = document.getElementById('new');
-    if (newSection) newSection.classList.add('active');
-    initializeAppCount();
-    initializeAndRefreshTables();
-  } else {
-    showLoginPage();
-  }
-
-  const loginForm = document.getElementById('login-form');
-  if (loginForm) {
-    loginForm.addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const name = (document.getElementById('login-name') || {}).value?.trim();
-      if (!name) { if (typeof window.showToast === 'function') window.showToast('Name is required!', 'error'); else alert('Name is required!'); return; }
-      await handleLoginFunction(name);
-    });
-  }
-
-  const addAppBtn = document.querySelector('.add-app-btn');
-  if (addAppBtn) {
-    addAppBtn.removeAttribute('onclick');
-    addAppBtn.addEventListener('click', async function(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const ok = await loadModalContent('new');
-      if (!ok) {
-        if (typeof window.showToast === 'function') window.showToast('Failed to load application form. Please refresh the page.', 'error');
-        else alert('Failed to load application form. Please refresh the page.');
-        return;
-      }
-      if (typeof showNewApplicationModal === 'function') {
-        showNewApplicationModal();
-      }
-    });
-  }
-});
-// ----------- AUTH / SESSION ----------
-function showLoginPage() {
-  document.body.classList.remove('logged-in');
-  localStorage.removeItem('loggedInName');
-  localStorage.removeItem('userRole');
-  localStorage.removeItem('userLevel');
-  clearIntervals();
-}
-
-function showDashboard() {
-  document.body.classList.add('logged-in');
-  const loggedInName = localStorage.getItem('loggedInName');
-  const userRole = localStorage.getItem('userRole');
-  if (loggedInName) setLoggedInUser(loggedInName, userRole);
-}
-
-function setLoggedInUser(name, role = '') {
-  const el = cachedElements['logged-in-user'];
-  if (el) el.textContent = role ? `${name} (${role})` : name;
-  if (name) updateUserNotificationBadge();
-}
-
-async function logout() {
-  // Use promise-based confirmation modal
-  try {
-    const ok = (typeof window.showConfirmModal === 'function')
-      ? await window.showConfirmModal('Are you sure you want to logout?', { title: 'Confirm Logout', confirmText: 'Logout', cancelText: 'Cancel' })
-      : confirm('Are you sure you want to logout?');
-
-    if (!ok) return;
-
-    localStorage.removeItem('loggedInName');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem('userLevel');
-    clearIntervals();
-    showLoginPage();
-
-    if (typeof window.showToast === 'function') window.showToast('Logged out', 'info');
-  } catch (e) {
-    console.error('logout error', e);
-  }
-}
-
-function restrictIfNotLoggedIn() {
-  const loggedInName = localStorage.getItem('loggedInName');
-  if (!loggedInName) { showLoginPage(); return true; }
-  return false;
-}
-
-async function verifyUserOnLoad(name) {
-  try {
-    showLoading('Verifying user...');
-    const result = await window.apiService.login(name);
-    hideLoading();
-    if (result.success) {
-      localStorage.setItem('userRole', result.user?.role || '');
-      localStorage.setItem('userLevel', result.user?.level || '');
-      setLoggedInUser(name, result.user?.role || '');
-      showDashboard();
-      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-      const newSection = document.getElementById('new');
-      if (newSection) newSection.classList.add('active');
-      initializeAppCount();
-      initializeAndRefreshTables();
-    } else {
-      showLoginPage();
-    }
-  } catch (err) {
-    hideLoading();
-    console.error('verifyUserOnLoad error', err);
-    showLoginPage();
-  }
-}
-
-async function handleLoginFunction(name) {
-  try {
-    showLoading('Signing in...');
-    const response = await window.apiService.login(name);
-    hideLoading();
-    if (response.success) {
-      localStorage.setItem('loggedInName', name);
-      localStorage.setItem('userRole', response.user?.role || '');
-      localStorage.setItem('userLevel', response.user?.level || '');
-      setLoggedInUser(name, response.user?.role || '');
-      showDashboard();
-      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-      const newSection = document.getElementById('new');
-      if (newSection) newSection.classList.add('active');
-      initializeAppCount();
-      initializeAndRefreshTables();
-    } else {
-      if (typeof window.showToast === 'function') window.showToast(response.message || 'Authentication failed', 'error');
-      else alert(response.message || 'Authentication failed');
-    }
-  } catch (err) {
-    hideLoading();
-    console.error('Login error', err);
-    if (typeof window.showToast === 'function') window.showToast('Login error: ' + (err && err.message ? err.message : err), 'error');
-    else alert('Login error: ' + (err && err.message ? err.message : err));
-  }
-}
-
-// ----------- SINGLE MODAL LOADER (NO RECURSION) ----------
+// ----------- MODAL CONTENT LOADER -----------
 async function loadModalContent(modalName = 'new') {
   const cfg = modalName === 'view' ? {
     url: 'viewApps.html',
@@ -517,11 +198,23 @@ async function loadModalContent(modalName = 'new') {
     return false;
   }
 }
-async function loadModalContentIfNeeded(modalName = 'new') { return await loadModalContent(modalName); }
-window.loadModalContent = loadModalContent;
-window.loadModalContentIfNeeded = loadModalContentIfNeeded;
 
-// ----------- VIEW MODAL OPEN (UPDATED) ----------
+// ----------- MODAL UTILITIES -----------
+function closeModal() {
+  const modal = document.getElementById('newApplicationModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function closeViewApplicationModal() {
+  const modal = document.getElementById('viewApplicationModal');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.remove('active');
+  }
+  try { document.body.style.overflow = ''; } catch (e) {}
+  sessionStorage.removeItem('currentViewingApp');
+}
+
 async function openViewApplicationModal(appData) {
   const ok = await loadModalContent('view');
   if (!ok) {
@@ -565,310 +258,31 @@ async function openViewApplicationModal(appData) {
   }
 }
 
-function closeModal() {
-  const modal = document.getElementById('newApplicationModal');
-  if (modal) modal.style.display = 'none';
-}
-
-function closeViewApplicationModal() {
-  const modal = document.getElementById('viewApplicationModal');
-  if (modal) {
-    modal.style.display = 'none';
-    modal.classList.remove('active');
-  }
-  try { document.body.style.overflow = ''; } catch (e) {}
-  currentViewingAppData = null;
-  sessionStorage.removeItem('currentViewingApp');
-}
-window.closeViewApplicationModal = closeViewApplicationModal;
-
-// ----------- LOAD APPLICATIONS / TABLES ----------
-async function loadApplications(sectionId, options = {}) {
-  const map = { 'new': 'NEW','pending':'PENDING','pending-approvals':'PENDING_APPROVAL','approved':'APPROVED' };
-  const status = map[sectionId];
-  if (!status) return;
-
-  ensureSectionState(sectionId);
-  const state = sectionStates[sectionId];
-  state.requestId++;
-  const requestId = state.requestId;
-
-  const tbody = document.getElementById(`${sectionId}-list`);
-  if (!tbody) return;
-
-  const isAuto = options.isAutoRefresh || false;
-  if (options.showLoading !== false && !isAuto) {
-    setSectionHeaderLoading(sectionId, true);
-    tbody.innerHTML = `<tr><td colspan="5" class="loading">Loading applications...</td></tr>`;
-  } else {
-    if (isAuto) {
-      tbody.setAttribute('aria-busy','true');
-    } else {
-      tbody.setAttribute('aria-busy','true'); tbody.style.opacity='0.7';
-    }
-  }
-
-  try {
-    const response = await window.apiService.getApplications(status, { showLoading: false });
-    if (state.requestId !== requestId) return;
-
-    tbody.removeAttribute('aria-busy'); tbody.style.opacity='1';
-    setSectionHeaderLoading(sectionId, false);
-
-    if (response.success) {
-      diffUpdateTable(`${sectionId}-list`, response.data || []);
-    } else {
-      if (!isAuto) tbody.innerHTML = `<tr><td colspan="5" class="error">Error: ${response.message}</td></tr>`;
-      else console.warn('Auto-refresh error for', sectionId, response.message);
-    }
-  } catch (err) {
-    if (state.requestId !== requestId) return;
-
-    if (!isAuto) { tbody.removeAttribute('aria-busy'); tbody.style.opacity='1'; tbody.innerHTML = `<tr><td colspan="5" class="error">Error: ${err.message}</td></tr>`; setSectionHeaderLoading(sectionId, false); }
-    else console.error('Auto-refresh network error for', sectionId, err);
-  }
-}
-
-// Backwards compatible wrapper
-function populateTable(tableId, applications) {
-  diffUpdateTable(tableId, applications || []);
-}
-
-// ----------- handleAppNumberClick (fixed flow) ----------
-/*
-  Important change:
-  - We no longer display the view modal before fetching the application details.
-  - We show a small inline spinner next to the clicked application number while fetching.
-  - After fetching, we decide whether to open the 'new' modal (for NEW/DRAFT) or the 'view' modal.
-  - This prevents both modals appearing at once.
-*/
-async function handleAppNumberClick(appNumber, anchorEl = null) {
-  if (!appNumber) { if (typeof window.showToast === 'function') window.showToast('Invalid application number', 'error'); else alert('Invalid application number'); return; }
-  const userName = localStorage.getItem('loggedInName') || '';
-
-  // Add inline spinner next to the clicked anchor (or find one)
-  let spinner = null;
-  try {
-    if (!anchorEl) {
-      // try to find the first anchor with matching textContent
-      const anchors = Array.from(document.querySelectorAll('.app-number-link'));
-      anchorEl = anchors.find(a => a.textContent === appNumber) || null;
-    }
-    if (anchorEl) {
-      spinner = document.createElement('span');
-      spinner.className = 'inline-loading';
-      spinner.innerHTML = `<span class="spinner-inline" aria-hidden="true" style="margin-left:8px;"></span>`;
-      anchorEl.parentNode && anchorEl.parentNode.appendChild(spinner);
-    }
-  } catch (e) {
-    console.warn('Could not show inline spinner', e);
-  }
-
-  try {
-    // Fetch details without letting ApiService show the legacy overlay.
-    const response = await window.apiService.getApplicationDetails(appNumber, userName, { showLoading: false });
-
-    // remove inline spinner
-    if (spinner && spinner.parentNode) spinner.parentNode.removeChild(spinner);
-
-    if (response && response.success && response.data) {
-      const appData = response.data;
-
-      // If this application is a NEW draft, open the New Application modal only
-      if (appData.status === 'NEW' && (appData.completionStatus === 'DRAFT' || appData.completionStatus === 'Draft' || appData.completionStatus === 'draft')) {
-        // Load new modal content if needed, then show newApplication modal in edit mode
-        const ok = await loadModalContent('new');
-        if (!ok) { if (typeof window.showToast === 'function') window.showToast('Failed to load form.', 'error'); else alert('Failed to load form.'); return; }
-        if (typeof showNewApplicationModal === 'function') {
-          showNewApplicationModal(appNumber);
-        } else {
-          // fallback: open new modal element manually (if any)
-          const nm = document.getElementById('newApplicationModal');
-          if (nm) nm.style.display = 'block';
-        }
-        return;
-      }
-
-      // Otherwise open view modal (load content first, then initialize)
-      const okView = await loadModalContent('view');
-      if (!okView) {
-        if (typeof window.showToast === 'function') window.showToast('Failed to load view modal. Please refresh the page.', 'error');
-        else alert('Failed to load view modal. Please refresh the page.');
-        return;
-      }
-
-      // Show modal (so modal-local loader can be used by any subsequent actions)
-      const modal = document.getElementById('viewApplicationModal');
-      if (modal) {
-        modal.style.display = 'block';
-        modal.classList.add('active');
-      }
-
-      // Initialize view modal with data
-      if (typeof initViewApplicationModal === 'function') {
-        try { initViewApplicationModal(appData); } catch (e) { console.warn('initViewApplicationModal error', e); }
-      } else {
-        await openViewApplicationModal(appData);
-      }
-    } else {
-      if (typeof window.showToast === 'function') window.showToast('Failed to load application: ' + (response?.message || 'Not found'), 'error');
-      else alert('Failed to load application: ' + (response?.message || 'Not found'));
-    }
-  } catch (err) {
-    if (spinner && spinner.parentNode) spinner.parentNode.removeChild(spinner);
-    console.error('Error loading application details', err);
-    if (typeof window.showToast === 'function') window.showToast('Error loading application details: ' + (err && err.message ? err.message : err), 'error');
-    else alert('Error loading application details: ' + (err && err.message ? err.message : err));
-  }
-}
-
-// ----------- BADGE & NOTIFICATION HELPERS ----------
-async function updateBadgeCounts() {
-  try {
-    const resp = await window.apiService.getApplicationCounts();
-    if (resp.success && resp.data) {
-      updateCount('new', resp.data.new || 0);
-      updateCount('pending', resp.data.pending || 0);
-      updateCount('pending-approvals', resp.data.pendingApprovals || 0);
-      updateCount('approved', resp.data.approved || 0);
-    }
-  } catch (e) { console.error('updateBadgeCounts error', e); }
-}
-function updateCount(id, n) {
-  const el = document.getElementById(id + '-count');
-  if (!el) return;
-  el.textContent = n; el.style.display = n > 0 ? 'inline-block' : 'none';
-}
-
-async function updateUserNotificationBadge() {
-  const userName = localStorage.getItem('loggedInName'); if (!userName) return;
-  try {
-    const res = await window.apiService.getApplicationCountsForUser(userName);
-    const count = res.count || 0;
-    const badge = document.getElementById('user-notification-badge');
-    if (badge) { if (count>0) { badge.textContent = count>99?'99+':count; badge.style.display='flex'; } else badge.style.display='none'; }
-  } catch (e) { console.error('updateUserNotificationBadge', e); }
-}
-
-const debouncedRefreshApplications = debounce(async (isAuto=false) => {
-  const activeSection = document.querySelector('.content-section.active')?.id;
-  if (activeSection) {
-    await loadApplications(activeSection, { showLoading: !isAuto, isAutoRefresh: isAuto });
-    await updateBadgeCounts();
-    await updateUserNotificationBadge();
-  }
-}, 300);
-
-function refreshApplications() { debouncedRefreshApplications(false); }
-
-async function initializeAndRefreshTables() {
-  await loadApplications('new', { showLoading: true });
-  await updateBadgeCounts();
-  await updateUserNotificationBadge();
-  if (refreshInterval) clearInterval(refreshInterval);
-  refreshInterval = setInterval(async () => {
-    const active = document.querySelector('.content-section.active')?.id;
-    if (active) {
-      await loadApplications(active, { showLoading: false, isAutoRefresh: true });
-      await updateBadgeCounts();
-      await updateUserNotificationBadge();
-    }
-  }, 60000);
-}
-
-// ----------- USER MANAGEMENT (minimal) ----------
-async function getAllUsersHandler() {
-  try {
-    const r = await window.apiService.getAllUsers();
-    const users = r.data || [];
-    const tbody = document.getElementById('users-list-body');
-    if (!tbody) return;
-    if (!users.length) { tbody.innerHTML = `<tr><td colspan="4" class="no-data">No users found</td></tr>`; return; }
-    tbody.innerHTML = users.map(u => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.level)}</td><td>${escapeHtml(u.role)}</td><td class="actions"><button class="btn-icon btn-delete" onclick="deleteUser('${escapeHtml(u.name)}')"><i class="fas fa-trash"></i></button></td></tr>`).join('');
-  } catch (e) { console.error('getAllUsersHandler', e); const tbody = document.getElementById('users-list-body'); if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="error">Error loading users</td></tr>`; }
-}
-function refreshUsersList() { getAllUsersHandler(); }
-async function populateUsersTable() { await getAllUsersHandler(); }
-
-// ----------- NOTIFICATIONS ----------
-function initializeBrowserNotifications() {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'granted') setupNotificationListener();
-  else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p==='granted') setupNotificationListener(); });
-}
-function setupNotificationListener() {
-  if (notificationCheckInterval) clearInterval(notificationCheckInterval);
-  notificationCheckInterval = setInterval(() => { checkForNewApplications(); }, 30000);
-}
-async function checkForNewApplications() {
-  const user = localStorage.getItem('loggedInName'); if (!user || document.visibilityState === 'visible') return;
-  try {
-    const r = await window.apiService.getApplicationCountsForUser(user);
-    const current = r.count || 0; const previous = lastAppCount; lastAppCount = current;
-    if (current > previous && previous > 0) {
-      const newCount = current - previous; const role = localStorage.getItem('userRole') || '';
-      if (Notification.permission === 'granted') {
-        const n = new Notification('New Application Assignment', { body: `${user} have ${newCount} application(s) for your action${role?` as ${role}`:''}`, icon: 'https://img.icons8.com/color/192/000000/loan.png' });
-        n.onclick = () => { window.focus(); n.close(); refreshApplications(); };
-        setTimeout(()=>n.close(), 10000);
-      }
-    }
-  } catch (e) { console.error('checkForNewApplications', e); }
-}
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') { refreshApplications(); updateUserNotificationBadge(); }
-  else { const u = localStorage.getItem('loggedInName'); if (u) window.apiService.getApplicationCountsForUser(u).then(r => lastAppCount = r.count || 0).catch(() => {}); }
-}
-async function initializeAppCount() {
-  const u = localStorage.getItem('loggedInName'); if (!u) return;
-  try { const r = await window.apiService.getApplicationCountsForUser(u); lastAppCount = r.count || 0; } catch (e) { console.error('initializeAppCount', e); }
-}
-
-// ----------- SUCCESS MODAL ----------
 async function showSuccessModal(message, options = {}) {
   if (typeof window.showSuccessModal === 'function') {
     return window.showSuccessModal(message, options);
   }
-  // fallback to simple alert
   alert(message);
 }
-function closeSuccessModal() { if (typeof window.hideSuccessModal === 'function') return window.hideSuccessModal(); }
 
-// ----------- EXPORTS ----------
-window.showSection = async function(sectionId) {
-  if (restrictIfNotLoggedIn()) return;
-  document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-  const el = document.getElementById(sectionId); if (el) el.classList.add('active');
-  // Explicit manual refresh when a section is selected
-  await loadApplications(sectionId, { showLoading: true });
-};
-window.refreshApplications = refreshApplications;
-window.refreshUsersList = refreshUsersList;
-window.deleteUser = async function(name) {
-  try {
-    const ok = (typeof window.showConfirmModal === 'function')
-      ? await window.showConfirmModal(`Delete user: ${name}?`, { title: 'Confirm Delete', confirmText: 'Delete', cancelText: 'Cancel', danger: true })
-      : confirm('Delete user: ' + name + '?');
-    if (!ok) return;
-    const res = await window.apiService.deleteUser(name);
-    if (res.success) {
-      if (typeof window.showSuccessModal === 'function') await window.showSuccessModal(res.message || 'Deleted');
-      else alert(res.message || 'Deleted');
-      refreshUsersList();
-    } else {
-      if (typeof window.showToast === 'function') window.showToast(res.message || 'Delete failed', 'error');
-      else alert(res.message || 'Delete failed');
-    }
-  } catch(e){
-    if (typeof window.showToast === 'function') window.showToast('Error deleting user: ' + (e && e.message), 'error');
-    else alert('Error deleting user: '+(e && e.message));
+function closeSuccessModal() { 
+  if (typeof window.hideSuccessModal === 'function') return window.hideSuccessModal(); 
+}
+
+function restrictIfNotLoggedIn() {
+  const loggedInName = localStorage.getItem('loggedInName');
+  if (!loggedInName) { 
+    if (typeof showLoginPage === 'function') showLoginPage();
+    return true; 
   }
-};
-window.logout = logout;
-window.closeSuccessModal = closeSuccessModal;
-window.setLoggedInUser = setLoggedInUser;
+  return false;
+}
+
+// ----------- EXPORTS FOR GLOBAL USE -----------
 window.loadModalContent = loadModalContent;
-window.loadModalContentIfNeeded = loadModalContentIfNeeded;
-
-
+window.closeModal = closeModal;
+window.closeViewApplicationModal = closeViewApplicationModal;
+window.openViewApplicationModal = openViewApplicationModal;
+window.showSuccessModal = showSuccessModal;
+window.closeSuccessModal = closeSuccessModal;
+window.restrictIfNotLoggedIn = restrictIfNotLoggedIn;
