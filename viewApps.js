@@ -1,7 +1,9 @@
-// viewApplicationJS - View Application Modal JavaScript (patched)
+// viewApps.js - UPDATED with proper modal closing
+// View Application Modal JavaScript (patched for role-driven editors)
 // - Uses server permissions when available to show comment editors by role
 // - Falls back to client-stored role if server permissions unavailable
 // - Restores NET INCOME into table
+// - FIXED: Closes modal after successful submission
 
 console.log('viewApplicationJS loaded (patched for role-driven editors)');
 
@@ -64,7 +66,7 @@ function shadeColor(hexColor, percent) {
   }
 }
 
-// Fetch user permissions from server (uses api action 'get_user_permissions')
+// Fetch user permissions from server
 async function fetchUserPermissions(userName) {
   try {
     if (!userName) return null;
@@ -78,7 +80,7 @@ async function fetchUserPermissions(userName) {
   }
 }
 
-// Main function to fetch and show application details using ApiService
+// Main function to fetch and show application details
 async function viewApplication(appNumber) {
   if (!appNumber) {
     console.error('No application number provided');
@@ -98,14 +100,20 @@ async function viewApplication(appNumber) {
       initViewApplicationModal(response.data);
     } else {
       console.error('Failed to fetch application details', response);
-      if (typeof window.showToast === 'function') window.showToast('Failed to load application details: ' + (response?.message || 'Unknown error'), 'error');
-      else alert('Failed to load application details: ' + (response?.message || 'Unknown error'));
+      if (typeof window.showToast === 'function') {
+        window.showToast('Failed to load application details: ' + (response?.message || 'Unknown error'), 'error');
+      } else {
+        alert('Failed to load application details: ' + (response?.message || 'Unknown error'));
+      }
     }
   } catch (err) {
     if (typeof hideLoading === 'function') hideLoading();
     console.error('Error fetching application:', err);
-    if (typeof window.showToast === 'function') window.showToast('Failed to load application details.', 'error');
-    else alert('Failed to load application details.');
+    if (typeof window.showToast === 'function') {
+      window.showToast('Failed to load application details.', 'error');
+    } else {
+      alert('Failed to load application details.');
+    }
   }
 }
 
@@ -206,32 +214,6 @@ function initViewApplicationModal(appData) {
   }
 }
 
-function closeViewApplicationModal() {
-  const modal = document.getElementById('viewApplicationModal');
-  if (modal) {
-    modal.style.display = 'none';
-    modal.classList.remove('active');
-  }
-  try { document.body.style.overflow = ''; } catch (e) {}
-}
-
-// Open edit section from view
-function openEditSection(tabName) {
-  try {
-    if (!currentAppData || !currentAppData.appNumber) {
-      if (typeof window.showToast === 'function') window.showToast('Application not loaded.', 'error');
-      else alert('Application not loaded.');
-      return;
-    }
-    closeViewApplicationModal();
-    sessionStorage.setItem('editTab', tabName || 'tab1');
-    if (typeof showNewApplicationModal === 'function') showNewApplicationModal(currentAppData.appNumber);
-    else window.showNewApplicationModal && window.showNewApplicationModal(currentAppData.appNumber);
-  } catch (e) {
-    console.error('Error opening edit section:', e);
-  }
-}
-
 // Hide all editors
 function hideAllRoleEditors() {
   document.querySelectorAll('.comment-editor').forEach(el => {
@@ -239,7 +221,7 @@ function hideAllRoleEditors() {
   });
 }
 
-// Show editors matching a role (simple helper)
+// Show editors matching a role
 function showEditorForRole(roleName) {
   if (!roleName) return;
   const roleLower = roleName.toString().trim().toLowerCase();
@@ -266,7 +248,7 @@ function showRelevantCommentEditors(roleOrPerms, stage) {
   hideAllRoleEditors();
 
   if (!role) {
-    console.warn('showRelevantCommentEditors: no role available (server and local fallback missing)');
+    console.warn('showRelevantCommentEditors: no role available');
     return;
   }
 
@@ -302,16 +284,9 @@ function showRelevantCommentEditors(roleOrPerms, stage) {
       el.style.display = 'none';
     }
   });
-
-  if (shown === 0) {
-    console.info(`No comment editors shown for role="${role}" stage="${stage}". Check data-role/data-stages attributes:`);
-    editors.forEach((el, idx) => {
-      console.info(`#${idx+1}`, { role: el.dataset.role, stages: el.dataset.stages, visible: getComputedStyle(el).display });
-    });
-  }
 }
 
-// saveStageComment uses API and server-side enforcement
+// ===== FIXED: saveStageComment with proper modal closing =====
 async function saveStageComment(isRevert, explicitAction) {
   if (!currentAppData || !currentAppData.appNumber) {
     if (typeof window.showToast === 'function') window.showToast('Application data not available.', 'error');
@@ -327,16 +302,25 @@ async function saveStageComment(isRevert, explicitAction) {
   try {
     if (isRevert || explicitAction === 'REVERT') {
       const targetStage = prompt('Enter stage to revert to (New, Assessment, Compliance, Ist Review, 2nd Review):');
-      if (!targetStage) { if (typeof hideLoading === 'function') hideLoading(); return; }
+      if (!targetStage) { 
+        if (typeof hideLoading === 'function') hideLoading(); 
+        return; 
+      }
 
       const payload = { appNumber, targetStage, userName, comment };
       const resp = await window.apiService.request('revert_application_stage', payload, { showLoading: false });
       if (typeof hideLoading === 'function') hideLoading();
 
       if (resp && resp.success) {
-        if (typeof showSuccessModal === 'function') await showSuccessModal(resp.message || 'Application reverted successfully');
-        else alert(resp.message || 'Application reverted successfully');
-        closeViewApplicationModal();
+        if (typeof window.showSuccessModal === 'function') {
+          await window.showSuccessModal(resp.message || 'Application reverted successfully');
+        } else {
+          alert(resp.message || 'Application reverted successfully');
+        }
+        // ===== CLOSE MODAL AFTER SUCCESS =====
+        if (typeof closeViewApplicationModal === 'function') {
+          closeViewApplicationModal();
+        }
         if (typeof refreshApplications === 'function') refreshApplications();
       } else {
         if (typeof window.showToast === 'function') window.showToast('Error: ' + (resp?.message || 'Unknown error'), 'error');
@@ -370,15 +354,15 @@ async function saveStageComment(isRevert, explicitAction) {
     if (typeof hideLoading === 'function') hideLoading();
 
     if (!resp) {
-      if (typeof window.showToast === 'function') showToast('No response from server', 'error');
+      if (typeof window.showToast === 'function') window.showToast('No response from server', 'error');
       else alert('No response from server');
       return;
     }
 
     if (!resp.success) {
       if (resp.code === 'CONFLICT') {
-        const ok = (typeof showConfirmModal === 'function')
-          ? await showConfirmModal('This application changed since you opened it. Reload details and try again?', { title: 'Conflict', confirmText: 'Reload', cancelText: 'Cancel' })
+        const ok = (typeof window.showConfirmModal === 'function')
+          ? await window.showConfirmModal('This application changed since you opened it. Reload details and try again?', { title: 'Conflict', confirmText: 'Reload', cancelText: 'Cancel' })
           : confirm('This application changed since you opened it. Reload details and try again?');
 
         if (ok) viewApplication(appNumber);
@@ -390,19 +374,25 @@ async function saveStageComment(isRevert, explicitAction) {
       return;
     }
 
-    // success: use returned updated app if present
-    const updated = resp.data && resp.data.app ? resp.data.app : null;
-    if (updated) {
-      currentAppData = updated;
-      initViewApplicationModal(updated);
-      if (typeof showSuccessModal === 'function') await showSuccessModal(resp.message || 'Action completed successfully');
-      else alert(resp.message || 'Action completed successfully');
-      if (typeof refreshApplications === 'function') refreshApplications();
+    // ===== SUCCESS: Show message and CLOSE MODAL =====
+    const serverMessage = serverComputeFriendlyMessage(action, currentAppData.stage, resp.data?.to?.stage);
+    
+    if (typeof window.showSuccessModal === 'function') {
+      await window.showSuccessModal(resp.message || serverMessage);
+    } else if (typeof window.showToast === 'function') {
+      window.showToast(resp.message || serverMessage, 'success');
     } else {
-      if (typeof showSuccessModal === 'function') await showSuccessModal(resp.message || 'Action completed successfully');
-      else alert(resp.message || 'Action completed successfully');
+      alert(resp.message || serverMessage);
+    }
+
+    // ===== CRITICAL: CLOSE THE MODAL AFTER SUCCESS =====
+    if (typeof closeViewApplicationModal === 'function') {
       closeViewApplicationModal();
-      if (typeof refreshApplications === 'function') refreshApplications();
+    }
+
+    // Refresh the application table
+    if (typeof refreshApplications === 'function') {
+      refreshApplications();
     }
 
   } catch (err) {
@@ -413,10 +403,36 @@ async function saveStageComment(isRevert, explicitAction) {
   }
 }
 
-/* -------------------------
-   Existing helper functions
-   (kept mostly unchanged)
-   ------------------------- */
+/**
+ * serverComputeFriendlyMessage(action, fromStage, toStage)
+ * Returns a descriptive message for client consumption
+ */
+function serverComputeFriendlyMessage(action, fromStage, toStage) {
+  const a = (action || '').toString().toUpperCase();
+  const from = (fromStage || '').toString().trim();
+  const to = (toStage || '').toString().trim();
+
+  if (a === 'APPROVE') {
+    return 'Application approved successfully';
+  }
+  if (a === 'REVERT') {
+    return to ? `Application reverted to "${to}" successfully` : 'Application reverted successfully';
+  }
+  if (a === 'SUBMIT') {
+    if (to) {
+      const t = to.toLowerCase();
+      if (t === 'new' || t === 'assessment') return 'New Loan Application submitted successfully';
+      if (t.includes('compliance')) return 'Compliance review submitted successfully';
+      if (t.includes('ist') || t.includes('first') || t.includes('1st')) return 'Head of Credit review submitted successfully';
+      if (t.includes('2nd') || t.includes('second')) return 'Second review submitted successfully';
+      if (t.includes('approval') || t.includes('pending approval')) return 'Application submitted for approval';
+    }
+    return 'Application submitted successfully';
+  }
+  return 'Action completed successfully';
+}
+
+/* ===== HELPER FUNCTIONS ===== */
 
 function populateLoanHistoryReview(loanHistory) {
   const tbody = document.querySelector('#view-loanHistoryTable tbody');
@@ -443,7 +459,6 @@ function populatePersonalBudgetReview(personalBudget) {
 
   tbody.innerHTML = '';
 
-  // group rows
   const groups = { Income: [], Expense: [], Repayment: [] };
 
   (personalBudget || []).forEach(item => {
@@ -456,7 +471,6 @@ function populatePersonalBudgetReview(personalBudget) {
   });
 
   function appendGroup(title, items) {
-    // header row for group
     const header = document.createElement('tr');
     header.innerHTML = `<td colspan="2" style="font-weight:bold; padding-top:8px;">${escapeHtml(title)}</td>`;
     tbody.appendChild(header);
@@ -479,7 +493,6 @@ function populatePersonalBudgetReview(personalBudget) {
   appendGroup('EXPENDITURE', groups.Expense);
   appendGroup('REPAYMENT', groups.Repayment);
 
-  // Restore NET INCOME and DSR rows into the table (single summary rows)
   let netIncomeVal = null;
   if (currentAppData && currentAppData.netIncome !== undefined && currentAppData.netIncome !== null) {
     netIncomeVal = currentAppData.netIncome;
@@ -499,7 +512,6 @@ function populatePersonalBudgetReview(personalBudget) {
     else dsrVal = '0.00%';
   }
 
-  // Append summary rows to the table (single-row summary)
   const netRow = document.createElement('tr');
   netRow.innerHTML = `<td style="text-align:right; font-weight:bold;">NET INCOME</td><td style="font-weight:bold;">${formatCurrency(netIncomeVal)}</td>`;
   tbody.appendChild(netRow);
@@ -516,8 +528,6 @@ function populateMonthlyTurnoverReview(turnover) {
 
   const months = ['month1','month2','month3'];
   let hasData = false;
-
-  // Accumulators
   let totalCr = 0, totalDr = 0, totalMax = 0, totalMin = 0;
   let countedMonths = 0;
 
@@ -531,7 +541,6 @@ function populateMonthlyTurnoverReview(turnover) {
 
     if (monthVal || cr || dr || maxB || minB) hasData = true;
 
-    // Build month row
     const row = document.createElement('tr');
     row.innerHTML = `<td>${escapeHtml(monthVal || ('Month ' + n))}</td>
                      <td>${formatCurrency(cr)}</td>
@@ -567,9 +576,7 @@ function populateMonthlyTurnoverReview(turnover) {
 
   const monthsForAvg = countedMonths > 0 ? countedMonths : 3;
   appendCalcRow('<strong>Monthly Average</strong>', totalCr / monthsForAvg, totalDr / monthsForAvg, totalMax / monthsForAvg, totalMin / monthsForAvg);
-
   appendCalcRow('<strong>Weekly Average</strong>', totalCr / (monthsForAvg * 4), totalDr / (monthsForAvg * 4), totalMax / (monthsForAvg * 4), totalMin / (monthsForAvg * 4));
-
   appendCalcRow('<strong>Daily Average</strong>', totalCr / (monthsForAvg * 30), totalDr / (monthsForAvg * 30), totalMax / (monthsForAvg * 30), totalMin / (monthsForAvg * 30));
 }
 
@@ -614,22 +621,18 @@ function openDocument(docType) {
   }
 }
 
-/* UI state logic (unchanged except small tweak for branch manager revert) */
+/* ===== UI STATE LOGIC ===== */
 function updateModalUIForStage(appData) {
   const stage = (appData.stage || 'New').toString().trim();
   const status = (appData.status || '').toString().trim().toUpperCase();
   const userRoleRaw = (localStorage.getItem('userRole') || '').toString().trim();
   const role = userRoleRaw.toLowerCase();
 
-  // Elements
   const signatureSection = document.getElementById('signatures-section');
-  const commentSection = document.getElementById('stage-comment-section');
-  const commentLabel = document.getElementById('stage-comment-label');
   const approveBtn = document.getElementById('btn-approve');
   const revertBtn = document.getElementById('btn-revert');
   const submitBtn = document.getElementById('btn-submit');
 
-  // Signatures visible only when approved
   if (signatureSection) {
     if (status === 'APPROVED' || stage === 'Approval') {
       signatureSection.style.display = 'block';
@@ -638,19 +641,12 @@ function updateModalUIForStage(appData) {
     }
   }
 
-  // Hide generic comment area initially
-  if (commentSection) commentSection.style.display = 'none';
-  if (commentLabel) commentLabel.style.display = 'none';
-
-  // Hide all action buttons by default
   if (approveBtn) approveBtn.style.display = 'none';
   if (revertBtn) revertBtn.style.display = 'none';
   if (submitBtn) submitBtn.style.display = 'none';
 
-  // Hide all role-specific editors initially
   hideAllRoleEditors();
 
-  // Role helpers
   const isAdmin = role === 'admin';
   const isCreditOfficer = role.includes('credit officer') || role.includes('credit sales officer') || role.includes('credit analyst');
   const isAMLRO = role === 'amlro' || role.includes('amlro');
@@ -658,7 +654,6 @@ function updateModalUIForStage(appData) {
   const isBranchManager = role.includes('branch manager') || role.includes('branch manager/approver');
   const isApprover = role === 'approver' || role.includes('approver');
 
-  // Apply tables per status (NEW, PENDING, PENDING APPROVAL, APPROVED)
   switch (status) {
     case 'NEW':
     case '':
@@ -694,24 +689,15 @@ function updateModalUIForStage(appData) {
       break;
 
     case 'APPROVED':
-      // no action buttons
       break;
 
     default:
       break;
   }
-
-  const anyEditorVisible = Array.from(document.querySelectorAll('.comment-editor')).some(el => el.style.display !== 'none');
-  if (anyEditorVisible) {
-    if (commentSection) commentSection.style.display = 'block';
-    if (commentLabel) {
-      commentLabel.style.display = 'block';
-      commentLabel.textContent = 'Comment';
-    }
-  }
 }
 
-/* small helper / fallbacks (kept) */
+/* ===== HELPER FUNCTIONS ===== */
+
 function safeSetText(id, value) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -722,21 +708,25 @@ function safeSetText(id, value) {
   const normalized = value.toString().replace(/\r\n/g, '\n');
   el.textContent = normalized;
 }
+
 function safeSetValue(id, value) {
   const el = document.getElementById(id);
   if (el) el.value = value;
 }
+
 function formatCurrency(value) {
   if (value === null || value === undefined) return '0.00';
   const num = parseFloat(value);
   return isNaN(num) ? '0.00' : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
 function formatDate(dateString) {
   if (!dateString) return 'N/A';
   const d = new Date(dateString);
   if (isNaN(d)) return dateString;
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
+
 function escapeHtml(s) {
   if (!s) return '';
   return s.toString().replace(/[&<>"']/g, function(m) {
